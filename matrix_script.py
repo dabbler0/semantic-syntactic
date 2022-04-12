@@ -1,69 +1,112 @@
 from matrices_modular import *
+from entanglement_models import *
+from lstms import *
 
-# Set up mutator
-def t_size_generator(l):
-    return min(l, np.random.randint(2, 16))
+current_experiment = 'ARBITRARY'
 
-def g_size_generator(l):
-    return min(l, np.random.randint(1, 16))
+# Contiguous LSTM
+if current_experiment == 'SOLVE_S':
+    mutator = GreenOrderMutator(
+        lambda s: generate_disjoint_3x3(s, t_size_generator, g_size_generator)
+    )
 
-mutator = GreenOrderMutator(
-    lambda s: generate_disjoint_3x3(s, t_size_generator, g_size_generator)
-)
+    m_prop = MatrixProp(sentence_prop, 'disjoint_broad_3x3', mutator)
+    s_prop = scored_prop_for(m_prop)
 
-m_prop = MatrixProp(sentence_prop, 'disjoint_broad_3x3', mutator)
-abs_score_prop = four_score_prop(m_prop)
+    tt_model_prop = entanglement_model(
+        s_prop, 1, 1,
+        (lambda: SelfEntanglementModel()),
+        'self1param'
+    )
+    mm_model_prop = entanglement_model(
+        s_prop, 2, 2,
+        (lambda: SelfEntanglementModel()),
+        'self1param'
+    )
 
-tiny = Dataset('tiny-0')
-scores = tiny[abs_score_prop]
+    tiny = Dataset('tiny-0')
+    tt_trained_model = tiny[tt_model_prop]
+    mm_trained_model = tiny[mm_model_prop]
+
+if current_experiment == 'LSTM':
+    contig_mutator = GreenOrderMutator(
+        lambda s: generate_contiguous_3x3(s)
+    )
+
+    m_prop = MatrixProp(sentence_prop, 'big_nonid_contiguous_3x3', contig_mutator)
+
+    tiny = Dataset('tiny-0')
+    large = Dataset('large-1')
+    model_prop = lstm_prop(sentence_prop)
+    lstm_model = large[model_prop]
+
+    abs_score_prop = four_score_prop(m_prop,
+        model_fn = lstm_scorer(lstm_model),
+        model_label = 'lstmscored'
+    )
+    mut_score_prop = four_score_prop(m_prop,
+        model_fn = lstm_scorer(lstm_model),
+        model_label = 'lstmscored',
+        score_type='mut'
+    )
+
+    scores = tiny[abs_score_prop]
+    mut_scores = tiny[mut_score_prop]
+
+# Arbitrary
+if current_experiment == 'ARBITRARY':
+    mutator = GreenOrderMutator(
+        generate_arbitrary_3x3
+    )
+
+    m_prop = MatrixProp(sentence_prop, 'arbitrary_3x3', mutator)
+    abs_score_prop = four_score_prop(m_prop)
+
+    tiny = Dataset('tiny-0')
+    scores = tiny[abs_score_prop]
+
+# Disjoint broad
+if current_experiment == 'DISJOINT_BROAD':
+    def t_size_generator(l):
+        return min(l, np.random.randint(2, 16))
+
+    def g_size_generator(l):
+        return min(l, np.random.randint(1, 16))
+
+    mutator = GreenOrderMutator(
+        lambda s: generate_disjoint_3x3(s, t_size_generator, g_size_generator)
+    )
+
+    m_prop = MatrixProp(sentence_prop, 'disjoint_broad_3x3', mutator)
+    abs_score_prop = four_score_prop(m_prop)
+
+    tiny = Dataset('tiny-0')
+    scores = tiny[abs_score_prop]
 
 # Contiguous
-'''
-contig_mutator = GreenOrderMutator(
-    lambda s: generate_contiguous_3x3(s)
-)
+if current_experiment == 'CONTIGUOUS':
+    contig_mutator = GreenOrderMutator(
+        lambda s: generate_contiguous_3x3(s)
+    )
 
-m_prop = MatrixProp(sentence_prop, 'big_contiguous_3x3', contig_mutator)
-abs_score_prop = four_score_prop(m_prop)
+    m_prop = MatrixProp(sentence_prop, 'big_nonid_contiguous_3x3', contig_mutator)
+    abs_score_prop = four_score_prop(m_prop)
+    mut_score_prop = four_score_prop(m_prop, score_type='mut')
 
-tiny = Dataset('tiny-0')
-scores = tiny[abs_score_prop]
-'''
+    tiny = Dataset('tiny-0')
+    scores = tiny[abs_score_prop]
+    mut_scores = tiny[mut_score_prop]
 
-'''
-contig_mutator = GreenOrderMutator(
-    lambda s: generate_contiguous_3x3(s)
-)
+# Distant
+if current_experiment == 'DISTANT':
+    distant_mutator = GreenOrderMutator(
+        lambda s: generate_distant_3x3(s)
+    )
 
-m_prop = MatrixProp(sentence_prop, 'big_nonid_contiguous_3x3', contig_mutator)
-abs_score_prop = four_score_prop(m_prop)
-mut_score_prop = four_score_prop(m_prop, score_type='mut')
+    m_prop = MatrixProp(sentence_prop, 'big_nonid_distant_3x3', distant_mutator)
+    abs_score_prop = four_score_prop(m_prop)
+    mut_score_prop = four_score_prop(m_prop, score_type='mut')
 
-tiny = Dataset('tiny-0')
-scores = tiny[abs_score_prop]
-mut_scores = tiny[mut_score_prop]
-'''
-
-distant_mutator = GreenOrderMutator(
-    lambda s: generate_distant_3x3(s)
-)
-
-m_prop = MatrixProp(sentence_prop, 'big_nonid_distant_3x3', distant_mutator)
-abs_score_prop = four_score_prop(m_prop)
-mut_score_prop = four_score_prop(m_prop, score_type='mut')
-
-tiny = Dataset('tiny-0')
-scores = tiny[abs_score_prop]
-mut_scores = tiny[mut_score_prop]
-
-'''
-from matrices import *
-
-# Ordinary scoring
-tiny = Dataset('tiny-0')
-four_scores = tiny[gpt_four_score_prop]
-
-reference = Dataset('tiny-1')
-ngram_reference_prop = ngram_3x3_prop(reference)
-ngram_abs_scores = tiny[four_score_prop(ngram_reference_prop)]
-'''
+    tiny = Dataset('tiny-0')
+    scores = tiny[abs_score_prop]
+    mut_scores = tiny[mut_score_prop]

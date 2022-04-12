@@ -4,13 +4,15 @@ import nltk
 from nltk import tokenize
 import datasets
 from transformers import GPT2Tokenizer
-from tqdm import tqdm
+from tqdm import tqdm, trange
 import numpy as np
 from nltk.tokenize.treebank import TreebankWordTokenizer, TreebankWordDetokenizer
 import unidecode
 from ngram_model import *
 nltk_tokenizer = TreebankWordTokenizer()
 nltk_detokenizer = TreebankWordDetokenizer()
+
+IDENTITY = ({ 'type': 'id' }, (lambda x: x))
 
 class MatrixProp(Property):
     def __init__(self, sentence_prop, name, mutator, version = 0):
@@ -106,6 +108,7 @@ def generate_greenification(s,
         replacement_corpus = default_replacement_corpus,
         occupied = set(),
         size_generator = (lambda x: min(1, x))):
+
     replaceables = set(idx for idx in s if s[idx][2] in REPLACEABLE_POS) - occupied
     num_exchanges = size_generator(len(replaceables))
     subset = np.random.choice(
@@ -114,15 +117,7 @@ def generate_greenification(s,
         replace=False
     )
 
-    replacements = [
-        (
-            idx,
-            choose_from(replacement_corpus[s[idx][2]], s[idx][1])
-        )
-        for idx in subset
-    ]
-
-    return set(subset), { 'type': 'green', 'data': replacements }, lambda s: mutate(s, replacements)
+    return green_for_subset(s, subset, replacement_corpus)
 
 def apply_record(s, record, markup = False):
     if record['type'] == 'green':
@@ -170,11 +165,7 @@ def generate_permutation(s, occupied = set(), size_generator = (lambda x: min(2,
         replace=False
     )
     # Resample until not the identity
-    permutation = np.random.choice(subset_size, subset_size, replace=False)
-    while all(i == j for i, j in enumerate(permutation)):
-        permutation = np.random.choice(subset_size, subset_size, replace=False)
-
-    return set(subset), { 'type': 'order', 'data': (subset, permutation) }, (lambda s: apply_permutation(s, subset, permutation))
+    return permutation_for_subset(subset)
 
 class GreenOrderMutator:
     def __init__(self, op_generator):
@@ -210,6 +201,9 @@ class GreenOrderMutator:
 
 # GENERATING PERMUTATIONS
 def gen_nonid_perm(size):
+    if size <= 1:
+        return None
+
     permutation = np.random.choice(size, size, replace=False)
     while all(i == j for i, j in enumerate(permutation)):
         permutation = np.random.choice(size, size, replace=False)
@@ -218,6 +212,8 @@ def gen_nonid_perm(size):
 
 def permutation_for_subset(subset):
     permutation = gen_nonid_perm(len(subset))
+    if permutation is None:
+        return (subset,) + IDENTITY
 
     lset = list(subset)
 
@@ -281,7 +277,6 @@ def generate_contiguous_greenifications(s,
     )
 
 # == 3x3 generator ==
-IDENTITY = ({ 'type': 'id' }, (lambda x: x))
 
 def make_3x3(permutations, greenifications):
     if permutations is None or greenifications is None:
@@ -330,19 +325,28 @@ def generate_contiguous_3x3(s):
         generate_contiguous_greenifications(s, start_index = start, end_index = end)
     )
 
+def generate_arbitrary_3x3(s):
+    t_size_generator = (lambda x: np.random.randint(2, x + 1) if x >= 2 else 0)
+    g_size_generator = (lambda x: np.random.randint(1, x + 1) if x >= 1 else 0)
+
+    # Two random permutations
+    perm1 = generate_permutation(s, size_generator=t_size_generator)
+    perm2 = generate_permutation(s, size_generator=t_size_generator)
+
+    # Two random greenifications
+    green1 = generate_greenification(s, size_generator=g_size_generator)
+    green2 = generate_greenification(s, size_generator=g_size_generator)
+
+    return make_3x3([perm1, perm2], [green1, green2])
+
 def generate_disjoint_3x3(s, t_size_generator, g_size_generator):
-    identity = ({ 'type': 'id' }, (lambda x: x))
-
-    imut = [identity]
-    jmut = [identity]
-
     # Two random permutations
     perm1 = generate_permutation(s, size_generator=t_size_generator)
     perm2 = generate_permutation(s, occupied=perm1[0], size_generator=t_size_generator)
 
     # Two random greenifications
-    green1 = generate_greenification(s, size_generator=t_size_generator)
-    green2 = generate_greenification(s, occupied=green1[0], size_generator=t_size_generator)
+    green1 = generate_greenification(s, size_generator=g_size_generator)
+    green2 = generate_greenification(s, occupied=green1[0], size_generator=g_size_generator)
 
     return make_3x3([perm1, perm2], [green1, green2])
 
@@ -399,23 +403,35 @@ def score(t):
         result = lmmodel(t).logits[0]
         return criterion(result[:-1], t[0][1:]).cpu().numpy().tolist()
 
-def score_matrix(prop):
+def lstm_scorer(model):
+    model.eval()
+    def scorer(t):
+        with torch.no_grad():
+            t = torch.LongTensor(t)
+            inp = torch.nn.utils.rnn.pack_sequence([t[:-1]]).cuda()
+            targ = torch.nn.utils.rnn.pack_sequence([t[1:]]).cuda()
+
+            result = model(inp)
+            return criterion(result, targ).cpu().numpy().tolist()
+    return scorer
+
+def score_matrix(prop, score_fn = score):
     def run_scoring(d):
         result = []
         for matrix in tqdm(d[prop]):
             result.append([
-                [score(tokens) if 0 < len(tokens) < 1024 else None for tokens in row]
+                [score_fn(tokens) if 0 < len(tokens) < 1024 else None for tokens in row]
                 for row in matrix
             ])
         return result
     return run_scoring
 
-def scored_prop_for(m_prop):
+def scored_prop_for(m_prop, score_fn = score, score_label = 'scored'):
     t_prop = tokenized_prop_for(m_prop)
 
     return Property(
         [t_prop],
-        m_prop.name + '_scored',
+        m_prop.name + '_%s' % score_label,
         score_matrix(t_prop),
         version = 1
     )
@@ -463,6 +479,31 @@ def nuc_score_for(m):
     t = torch.exp(torch.Tensor(m))
     return torch.norm(t / torch.norm(t, p='fro'), p='nuc')
 
+def determine_subset_for(mod):
+    if mod['type'] == 'id':
+        return set()
+    elif mod['type'] == 'order':
+        return set(mod['data'][0])
+    elif mod['type'] == 'green':
+        return set(x[0] for x in mod['data'])
+
+def determine_distance_for_pair(mod1, mod2):
+    if len(determine_subset_for(mod1)) == 0 or len(determine_subset_for(mod2)) == 0:
+        return 0
+
+    end1 = max(*determine_subset_for(mod1))
+    beg2 = min(*determine_subset_for(mod2))
+    if end1 > beg2:
+        end2 = max(*determine_subset_for(mod2))
+        beg1 = min(*determine_subset_for(mod1))
+
+        if end2 > beg1:
+            return 0
+        else:
+            return beg1 - end2
+    else:
+        return beg2 - end1
+
 def four_minor_scores(d, p, f = abs_score_for):
     result = []
     for matrix in tqdm(d[p]):
@@ -474,17 +515,66 @@ def four_minor_scores(d, p, f = abs_score_for):
             ))
     return result
 
-def four_score_prop(m_prop, score_type = 'abs'):
+def entanglement_model(s_prop, i, j, model_factory, model_name,
+        epochs = 13):
+
+    BATCH_SIZE = 128
+    model = model_factory().cuda()
+
+    def train(d):
+        optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
+        dataset = d[s_prop]
+
+        batched_dataset = [
+            dataset[k:k+BATCH_SIZE]
+            for k in range(len(dataset) // BATCH_SIZE + 1)
+        ]
+
+        # r, a, b, d
+        batches = [
+            (
+                torch.Tensor([x[0][0] for x in b]),
+                torch.Tensor([x[i][0] for x in b]),
+                torch.Tensor([x[0][j] for x in b]),
+                torch.Tensor([x[i][j] for x in b])
+            ) for b in batched_dataset
+        ]
+
+        criterion = torch.nn.MSELoss()
+
+        for _ in trange(epochs):
+            # Rebatch
+            np.random.shuffle(batches)
+
+            # Single-S model
+            for r, a, b, d in batches:
+                # Inputs a:
+                prediction = model(r.cuda(), a.cuda(), b.cuda())
+                loss = criterion(prediction, d.cuda())
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+
+        return model
+
+    return Property(
+        [s_prop],
+        '%s_%d_%d_model_%s_%s' % (s_prop.name, i, j, model_name, epochs),
+        train
+    )
+
+def four_score_prop(m_prop, model_fn = score, model_label = 'scored', score_type = 'abs'):
     scoring_function = ({
         'abs': abs_score_for,
         'nuc': nuc_score_for,
         'mut': mut_score_for
     })[score_type]
-    s_prop = scored_prop_for(m_prop)
+    s_prop = scored_prop_for(m_prop, model_fn, model_label)
 
     return Property(
         [s_prop],
-        '%s_%s_evals' % (m_prop.name, score_type),
+        '%s_%s_%s_evals' % (m_prop.name, model_label, score_type),
         (lambda d: four_minor_scores(d, s_prop, f = scoring_function)),
         version = 1
     )

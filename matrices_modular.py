@@ -167,10 +167,7 @@ def generate_permutation(s, occupied = set(), size_generator = (lambda x: min(2,
     # Resample until not the identity
     return permutation_for_subset(subset)
 
-class GreenOrderMutator:
-    def __init__(self, op_generator):
-        self.op_generator = op_generator
-
+class Mutator:
     def parse(self, s):
         return {
             i: (i, tok, pos) for i, (tok, pos) in enumerate(
@@ -185,6 +182,42 @@ class GreenOrderMutator:
         }
         flattened = [inverted[i] for i in range(len(inverted))]
         return nltk_detokenizer.detokenize(flattened)
+
+def all_subsets(l):
+    if len(l) == 0:
+        return []
+
+    for sub in all_subsets(l[1:]):
+        yield [l[0]] + sub
+        yield sub
+
+class AllSubsetsMutator(Mutator):
+    def __init__(self, op_generator):
+        self.op_generator = op_generator
+
+    def __call__(self, s):
+        s = self.parse(s)
+
+        operations = self.op_generator(s)
+
+        records = []
+        result = []
+
+        # Iterate over subsets
+        for subset in all_subsets(operations):
+            cursor = s
+            ops_applied = []
+            for record, op in subset:
+                cursor = op(cursor)
+                ops_applied.append(record)
+            records.append(ops_applied)
+            result.append(self.deparse(cursor))
+
+        return [IDENTITY[0]], records, [result]
+
+class GreenOrderMutator(Mutator):
+    def __init__(self, op_generator):
+        self.op_generator = op_generator
 
     def __call__(self, s):
         s = self.parse(s)
@@ -275,6 +308,15 @@ def generate_contiguous_greenifications(s,
         green_for_subset(s, subset_left, replacement_corpus),
         green_for_subset(s, subset_right, replacement_corpus)
     )
+
+# == 3-element generators ==
+def gen_3_permutations(s):
+    t_size_generator = (lambda x: np.random.randint(2, x + 1) if x >= 2 else 0)
+    return [generate_permutation(s, size_generator=t_size_generator) for _ in range(3)]
+
+def gen_3_greenifications(s):
+    g_size_generator = (lambda x: np.random.randint(1, x + 1) if x >= 1 else 0)
+    return [generate_greenification(s, size_generator=g_size_generator) for _ in range(3)]
 
 # == 3x3 generator ==
 
@@ -515,14 +557,48 @@ def four_minor_scores(d, p, f = abs_score_for):
             ))
     return result
 
+def get_mse(model, dataset, i, j):
+    BATCH_SIZE = 128
+
+    batched_dataset = [
+        dataset[k:k+BATCH_SIZE]
+        for k in range(len(dataset) // BATCH_SIZE + 1)
+    ]
+
+    # r, a, b, d
+    batches = [
+        (
+            torch.Tensor([x[0][0] for x in b]),
+            torch.Tensor([x[i][0] for x in b]),
+            torch.Tensor([x[0][j] for x in b]),
+            torch.Tensor([x[i][j] for x in b])
+        ) for b in batched_dataset
+    ]
+
+    criterion = torch.nn.MSELoss(reduction='sum')
+
+    total_loss = 0
+    total_examples = 0
+
+    with torch.no_grad():
+        for r, a, b, d in batches:
+            # Inputs a:
+            prediction = model(r.cuda(), a.cuda(), b.cuda())
+            loss = criterion(prediction, d.cuda())
+
+            total_loss += loss
+            total_examples += len(r)
+
+    return total_loss / total_examples
+
 def entanglement_model(s_prop, i, j, model_factory, model_name,
-        epochs = 13):
+        epochs = 100):
 
     BATCH_SIZE = 128
     model = model_factory().cuda()
 
     def train(d):
-        optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
+        optimizer = torch.optim.Adam(model.parameters(), lr=3e-2)
         dataset = d[s_prop]
 
         batched_dataset = [
@@ -561,7 +637,8 @@ def entanglement_model(s_prop, i, j, model_factory, model_name,
     return Property(
         [s_prop],
         '%s_%d_%d_model_%s_%s' % (s_prop.name, i, j, model_name, epochs),
-        train
+        train,
+        version = 2
     )
 
 def four_score_prop(m_prop, model_fn = score, model_label = 'scored', score_type = 'abs'):

@@ -2,9 +2,29 @@ from matrices_modular import *
 from entanglement_models import *
 from lstms import *
 
-current_experiment = 'ARBITRARY'
+current_experiment = 'TRIADS'
 
-# Contiguous LSTM
+if current_experiment == 'TRIADS':
+    tiny = Dataset('tiny-0')
+
+    # Perm
+    perm_mutator = AllSubsetsMutator(
+        gen_3_permutations
+    )
+
+    p_m_prop = MatrixProp(sentence_prop, 'perm_subsets', perm_mutator, version = 1)
+    p_score_prop = scored_prop_for(p_m_prop)
+    p_scores = tiny[p_score_prop]
+
+    # Green
+    green_mutator = AllSubsetsMutator(
+        gen_3_greenifications
+    )
+
+    g_m_prop = MatrixProp(sentence_prop, 'green_subsets', green_mutator, version = 1)
+    g_score_prop = scored_prop_for(g_m_prop)
+    g_scores = tiny[g_score_prop]
+
 if current_experiment == 'SOLVE_S':
     mutator = GreenOrderMutator(
         lambda s: generate_disjoint_3x3(s, t_size_generator, g_size_generator)

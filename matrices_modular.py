@@ -1,4 +1,5 @@
 from tools import *
+from languages import *
 from gpt2 import *
 import nltk
 from nltk import tokenize
@@ -6,11 +7,8 @@ import datasets
 from transformers import GPT2Tokenizer
 from tqdm import tqdm, trange
 import numpy as np
-from nltk.tokenize.treebank import TreebankWordTokenizer, TreebankWordDetokenizer
 import unidecode
 from ngram_model import *
-nltk_tokenizer = TreebankWordTokenizer()
-nltk_detokenizer = TreebankWordDetokenizer()
 
 IDENTITY = ({ 'type': 'id' }, (lambda x: x))
 
@@ -31,13 +29,13 @@ class MatrixProp(Property):
         return result
 
 sentence_prop = InjectedProperty('sentence')
-def get_tag_corpus(d):
+def get_tag_corpus(d, language=ENGLISH_NLTK):
     appearances = {}
     tag_corpus = {}
 
     for sentence in tqdm(d[sentence_prop]):
-        text = nltk_tokenizer.tokenize(unidecode.unidecode(sentence))
-        pos = nltk.pos_tag(text)
+        text = language.tokenize(unidecode.unidecode(sentence))
+        pos = language.pos_tag(text)
         for tok, p in pos:
             if tok not in appearances:
                 appearances[tok] = set()
@@ -168,10 +166,15 @@ def generate_permutation(s, occupied = set(), size_generator = (lambda x: min(2,
     return permutation_for_subset(subset)
 
 class Mutator:
+    def __init__(self, language = ENGLISH_NLTK):
+        self.language = language
+
     def parse(self, s):
         return {
             i: (i, tok, pos) for i, (tok, pos) in enumerate(
-                nltk.pos_tag(nltk_tokenizer.tokenize(unidecode.unidecode(s)))
+                self.language.pos_tag(
+                    self.language.tokenize(
+                        unidecode.unidecode(s)))
             )
         }
 
@@ -181,18 +184,20 @@ class Mutator:
             for i in s
         }
         flattened = [inverted[i] for i in range(len(inverted))]
-        return nltk_detokenizer.detokenize(flattened)
+        return self.language.detokenize(flattened)
 
 def all_subsets(l):
     if len(l) == 0:
-        return []
+        yield []
+        return
 
     for sub in all_subsets(l[1:]):
         yield [l[0]] + sub
         yield sub
 
 class AllSubsetsMutator(Mutator):
-    def __init__(self, op_generator):
+    def __init__(self, op_generator, language=ENGLISH_NLTK):
+        super(AllSubsetsMutator, self).__init__(language)
         self.op_generator = op_generator
 
     def __call__(self, s):
@@ -207,7 +212,7 @@ class AllSubsetsMutator(Mutator):
         for subset in all_subsets(operations):
             cursor = s
             ops_applied = []
-            for record, op in subset:
+            for span, record, op in subset:
                 cursor = op(cursor)
                 ops_applied.append(record)
             records.append(ops_applied)
@@ -216,7 +221,8 @@ class AllSubsetsMutator(Mutator):
         return [IDENTITY[0]], records, [result]
 
 class GreenOrderMutator(Mutator):
-    def __init__(self, op_generator):
+    def __init__(self, op_generator, language=ENGLISH_NLTK):
+        super(GreenOrderMutator, self).__init__(language)
         self.op_generator = op_generator
 
     def __call__(self, s):
@@ -367,7 +373,7 @@ def generate_contiguous_3x3(s):
         generate_contiguous_greenifications(s, start_index = start, end_index = end)
     )
 
-def generate_arbitrary_3x3(s):
+def generate_arbitrary_3x3(s, replacement_corpus=default_replacement_corpus):
     t_size_generator = (lambda x: np.random.randint(2, x + 1) if x >= 2 else 0)
     g_size_generator = (lambda x: np.random.randint(1, x + 1) if x >= 1 else 0)
 
@@ -376,8 +382,12 @@ def generate_arbitrary_3x3(s):
     perm2 = generate_permutation(s, size_generator=t_size_generator)
 
     # Two random greenifications
-    green1 = generate_greenification(s, size_generator=g_size_generator)
-    green2 = generate_greenification(s, size_generator=g_size_generator)
+    green1 = generate_greenification(s,
+            size_generator=g_size_generator,
+            replacement_corpus=replacement_corpus)
+    green2 = generate_greenification(s,
+            size_generator=g_size_generator,
+            replacement_corpus=replacement_corpus)
 
     return make_3x3([perm1, perm2], [green1, green2])
 
@@ -592,13 +602,13 @@ def get_mse(model, dataset, i, j):
     return total_loss / total_examples
 
 def entanglement_model(s_prop, i, j, model_factory, model_name,
-        epochs = 100):
+        epochs = 100, lr=3e-2):
 
     BATCH_SIZE = 128
     model = model_factory().cuda()
 
     def train(d):
-        optimizer = torch.optim.Adam(model.parameters(), lr=3e-2)
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
         dataset = d[s_prop]
 
         batched_dataset = [
@@ -636,7 +646,7 @@ def entanglement_model(s_prop, i, j, model_factory, model_name,
 
     return Property(
         [s_prop],
-        '%s_%d_%d_model_%s_%s' % (s_prop.name, i, j, model_name, epochs),
+        '%s_%d_%d_model_%s_%d_%f' % (s_prop.name, i, j, model_name, epochs, lr),
         train,
         version = 2
     )

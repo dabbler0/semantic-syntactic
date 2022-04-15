@@ -4,6 +4,35 @@ from lstms import *
 
 current_experiment = 'TRIADS'
 
+if current_experiment == 'MUTATE-NONEN':
+    with StanfordMosesToolset('fr') as FRENCH:
+        sentence_prop = InjectedProperty('sentence')
+
+        fr_tiny1 = Dataset('fr-tiny-1')
+        fr_tiny0 = Dataset('fr-tiny-0')
+
+        fr_tc_prop = Property(
+            [sentence_prop],
+            'tagcorpus-fr',
+            lambda d: get_tag_corpus(d, language=FRENCH)
+        )
+
+        replacement_corpus = fr_tiny1[fr_tc_prop]
+
+        mutator = GreenOrderMutator(
+            (lambda s:
+                generate_arbitrary_3x3(
+                    s,
+                    replacement_corpus = replacment_corpus,
+                )
+            ),
+            language = FRENCH
+        )
+
+        m_prop = MatrixProp(sentence_prop, 'arbitrary_3x3', mutator)
+
+        mutated_sentences = fr_tiny0[m_prop]
+
 if current_experiment == 'TRIADS':
     tiny = Dataset('tiny-0')
 
@@ -12,7 +41,7 @@ if current_experiment == 'TRIADS':
         gen_3_permutations
     )
 
-    p_m_prop = MatrixProp(sentence_prop, 'perm_subsets', perm_mutator, version = 1)
+    p_m_prop = MatrixProp(sentence_prop, 'perm_subsets_v1', perm_mutator)
     p_score_prop = scored_prop_for(p_m_prop)
     p_scores = tiny[p_score_prop]
 
@@ -21,7 +50,7 @@ if current_experiment == 'TRIADS':
         gen_3_greenifications
     )
 
-    g_m_prop = MatrixProp(sentence_prop, 'green_subsets', green_mutator, version = 1)
+    g_m_prop = MatrixProp(sentence_prop, 'green_subsets_v1', green_mutator)
     g_score_prop = scored_prop_for(g_m_prop)
     g_scores = tiny[g_score_prop]
 
@@ -50,10 +79,10 @@ if current_experiment == 'SOLVE_S':
 
 if current_experiment == 'LSTM':
     contig_mutator = GreenOrderMutator(
-        lambda s: generate_contiguous_3x3(s)
+        generate_arbitrary_3x3
     )
 
-    m_prop = MatrixProp(sentence_prop, 'big_nonid_contiguous_3x3', contig_mutator)
+    m_prop = MatrixProp(sentence_prop, 'arbitrary_3x3', contig_mutator)
 
     tiny = Dataset('tiny-0')
     large = Dataset('large-1')

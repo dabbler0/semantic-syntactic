@@ -57,11 +57,17 @@ class LSTM_LM(torch.nn.Module):
         )
         return result, state
 
-    def init_state(self, batch):
-        return (
-            torch.zeros(self.layers, batch, self.hidden_size),
-            torch.zeros(self.layers, batch, self.hidden_size)
-        )
+    def init_state(self, batch, cuda = False):
+        if cuda:
+            return (
+                torch.zeros(self.layers, batch, self.hidden_size).cuda(),
+                torch.zeros(self.layers, batch, self.hidden_size).cuda()
+            )
+        else:
+            return (
+                torch.zeros(self.layers, batch, self.hidden_size),
+                torch.zeros(self.layers, batch, self.hidden_size)
+            )
 
 def packed_seq(batch):
     if any(len(s) <= 1 for s in batch):
